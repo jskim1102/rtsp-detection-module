@@ -3,15 +3,11 @@
 deepeye-lite ipcam.py 의 inference_router 차용. main.py 에서 include_router(inference_router).
 """
 
-import logging
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.inference import models_dir
 from app.streaming.manager import manager as stream_manager
-
-logger = logging.getLogger("rtsp-streaming.inference")
 
 
 # ─── 추론 제어 (모델 토글, ON/OFF, conf threshold) ───
@@ -71,29 +67,14 @@ def list_models() -> list[dict]:
     return models_dir.list_all_models()
 
 
-_classes_cache: dict[str, dict[int, str]] = {}
-
-
 @inference_router.get("/models/{name}/classes")
 def get_model_classes(name: str) -> list[dict]:
     """주어진 preset 모델의 클래스 ID→이름 목록.
 
-    preset allowlist 통과 시에만 lazy load → `model.names` → 캐시. 임의 `.pt` 로드 금지
-    (pickle RCE 차단). preset 가중치는 immutable 이라 캐시 stale 문제가 없다.
+    허용된 YOLO26 detection preset은 모두 COCO 80-class 모델이다. 클래스 이름 조회는
+    정적 메타데이터만 반환하고 가중치 다운로드·모델 로드를 시작하지 않는다.
     """
     if not models_dir.is_preset(name):
         raise HTTPException(status_code=404, detail="알 수 없는 모델 (preset 만 가능)")
 
-    if name not in _classes_cache:
-        try:
-            from ultralytics import YOLO
-            path = models_dir.resolve_model_path(name)
-            m = YOLO(path)
-            names = dict(m.names) if getattr(m, "names", None) else {}
-            _classes_cache[name] = {int(k): str(v) for k, v in names.items()}
-        except Exception as e:
-            logger.exception("모델 클래스 조회 실패: %s", name)
-            raise HTTPException(status_code=500, detail=f"모델 로드 실패: {e}")
-
-    names = _classes_cache[name]
-    return [{"id": k, "name": v} for k, v in sorted(names.items())]
+    return models_dir.list_model_classes(name)
