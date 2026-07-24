@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GpuUtilTargetUpdater } from "../src/utils/gpuUtilControl.ts";
+import {
+  GpuUtilInitialTargetGate,
+  GpuUtilTargetUpdater,
+} from "../src/utils/gpuUtilControl.ts";
 
 
 const wait = (milliseconds: number) =>
@@ -94,4 +97,75 @@ test("PUT 실패 시 마지막 서버 target으로 복원한다", async () => {
 
   assert.deepEqual(restored, [0.8]);
   updater.dispose();
+});
+
+
+test("사용자 조작 후 늦은 초기 GET은 pending PUT을 취소하지 않는다", async () => {
+  const requests: string[] = [];
+  const gate = new GpuUtilInitialTargetGate();
+  const updater = new GpuUtilTargetUpdater({
+    endpoint: "/api/inference/config",
+    initialTarget: 0.85,
+    debounceMs: 10,
+    fetcher: async (_input, init) => {
+      requests.push(String(init?.body));
+      return configResponse(0.6);
+    },
+  });
+
+  gate.markUserTouched();
+  updater.schedule(0.6);
+  const lateServerTarget = gate.acceptInitialServerTarget(0.85);
+  if (lateServerTarget !== null) {
+    updater.acceptServerTarget(lateServerTarget);
+    updater.schedule(lateServerTarget);
+  }
+  await wait(25);
+
+  assert.equal(lateServerTarget, null);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(requests[0]), { gpu_util_target: 0.6 });
+  updater.dispose();
+});
+
+
+test("사용자 조작 후 늦은 초기 GET은 in-flight PUT도 abort하지 않는다", async () => {
+  let signal: AbortSignal | undefined;
+  let resolvePut: ((response: Response) => void) | undefined;
+  const putResponse = new Promise<Response>((resolve) => {
+    resolvePut = resolve;
+  });
+  const gate = new GpuUtilInitialTargetGate();
+  const updater = new GpuUtilTargetUpdater({
+    endpoint: "/api/inference/config",
+    initialTarget: 0.85,
+    debounceMs: 5,
+    fetcher: async (_input, init) => {
+      signal = init?.signal as AbortSignal;
+      return putResponse;
+    },
+  });
+
+  gate.markUserTouched();
+  updater.schedule(0.6);
+  await wait(15);
+  const lateServerTarget = gate.acceptInitialServerTarget(0.85);
+  if (lateServerTarget !== null) {
+    updater.acceptServerTarget(lateServerTarget);
+    updater.schedule(lateServerTarget);
+  }
+
+  assert.equal(lateServerTarget, null);
+  assert.equal(signal?.aborted, false);
+  resolvePut?.(configResponse(0.6));
+  await wait(0);
+  updater.dispose();
+});
+
+
+test("미조작 상태에서는 최초 서버 target만 한 번 적용한다", () => {
+  const gate = new GpuUtilInitialTargetGate();
+
+  assert.equal(gate.acceptInitialServerTarget(0.7), 0.7);
+  assert.equal(gate.acceptInitialServerTarget(0.9), null);
 });

@@ -37,6 +37,28 @@ export function normalizeGpuUtilConfig(
 }
 
 /**
+ * 최초 GET target과 사용자 조작의 우선순위를 한 번만 결정한다.
+ * 사용자가 먼저 조작했다면 늦은 서버 target은 영구히 무시하고 duty만 갱신하게 한다.
+ */
+export class GpuUtilInitialTargetGate {
+  private userTouched = false;
+  private initialServerTargetHandled = false;
+
+  markUserTouched(): void {
+    this.userTouched = true;
+  }
+
+  acceptInitialServerTarget(target: number): number | null {
+    if (this.initialServerTargetHandled) return null;
+    this.initialServerTargetHandled = true;
+    if (this.userTouched) return null;
+    return normalizeGpuUtilConfig({
+      gpu_util_target: target,
+    }).gpu_util_target;
+  }
+}
+
+/**
  * GPU target PUT의 debounce/abort/rollback 수명주기를 DOM과 분리한다.
  * 컴포넌트 unmount 시 dispose()를 호출하면 timer와 in-flight 요청이 함께 정리된다.
  */

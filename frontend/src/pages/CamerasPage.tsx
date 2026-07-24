@@ -6,6 +6,7 @@ import SegmentedToggle from "../components/SegmentedToggle";
 import ModelManagerModal from "../components/ModelManagerModal";
 import ModelSettingsModal, { type ModelSettings } from "../components/ModelSettingsModal";
 import {
+  GpuUtilInitialTargetGate,
   GpuUtilTargetUpdater,
   normalizeGpuUtilConfig,
   type GpuUtilConfigStatus,
@@ -44,8 +45,13 @@ export default function CamerasPage() {
     DEFAULT_GPU_UTIL_TARGET_PCT
   );
   const [gpuUtilDutyPct, setGpuUtilDutyPct] = useState(0);
-  const gpuUtilInitializedRef = useRef(false);
   const gpuUtilUpdaterRef = useRef<GpuUtilTargetUpdater | null>(null);
+  const gpuUtilInitialTargetGateRef = useRef<GpuUtilInitialTargetGate | null>(
+    null
+  );
+  if (gpuUtilInitialTargetGateRef.current === null) {
+    gpuUtilInitialTargetGateRef.current = new GpuUtilInitialTargetGate();
+  }
 
   // ── detection 추론 컨트롤 (deepeye IpcamPage 차용, react-router 제외) ──
   // 카메라별 추론 ON/OFF.
@@ -116,12 +122,15 @@ export default function CamerasPage() {
           DEFAULT_GPU_UTIL_TARGET_PCT / 100
         );
         setGpuUtilDutyPct(config.gpu_util_duty * 100);
-        if (!gpuUtilInitializedRef.current) {
-          gpuUtilInitializedRef.current = true;
-          gpuUtilUpdaterRef.current?.acceptServerTarget(
+        const initialTarget =
+          gpuUtilInitialTargetGateRef.current?.acceptInitialServerTarget(
             config.gpu_util_target
+          ) ?? null;
+        if (initialTarget !== null) {
+          gpuUtilUpdaterRef.current?.acceptServerTarget(
+            initialTarget
           );
-          setGpuUtilTargetPct(Math.round(config.gpu_util_target * 100));
+          setGpuUtilTargetPct(Math.round(initialTarget * 100));
         }
       } catch {
         // 기존 카메라/추론 화면은 GPU 상태 endpoint 일시 실패와 독립적으로 유지한다.
@@ -454,7 +463,14 @@ export default function CamerasPage() {
             max="100"
             step="1"
             value={gpuUtilTargetPct}
+            onPointerDown={() =>
+              gpuUtilInitialTargetGateRef.current?.markUserTouched()
+            }
+            onKeyDown={() =>
+              gpuUtilInitialTargetGateRef.current?.markUserTouched()
+            }
             onChange={(event) => {
+              gpuUtilInitialTargetGateRef.current?.markUserTouched();
               setError("");
               setGpuUtilTargetPct(Number(event.target.value));
             }}
